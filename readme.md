@@ -1,0 +1,2 @@
+# Elaborato Triennale
+Questa repository contiene il file PDF, insieme al codice che l'ha generato, relativo al mio elaborato finale per la laurea triennale in Informatica presso l'Università degli Studi di Milano.
