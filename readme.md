@@ -1,2 +1,2 @@
 # Elaborato Triennale
-Questa repository contiene il file PDF, insieme al codice che l'ha generato, relativo al mio elaborato finale per la laurea triennale in Informatica presso l'Università degli Studi di Milano.
+Questa repository contiene la versione PDF, con il relativo sorgente, del mio elaborato finale per la laurea triennale in Informatica presso l'Università degli Studi di Milano, dal titolo "Soluzioni Puramente Apprese per il Problema dell'Approximate Set Membership".
