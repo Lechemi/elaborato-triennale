@@ -1,0 +1,354 @@
+\chapter{Filtri di Bloom Puramente Appresi}
+\label{ch:flf}
+
+\section{Strutture Dati Apprese e LBF}
+A differenza delle strutture dati tradizionali, dove le operazioni di inserimento, ricerca e cancellazione seguono schemi predefiniti e indipendenti dai dati, le strutture dati apprese sfruttano, in aggiunta, il ML per rilevare e sfruttare i pattern presenti nei dati stessi (\cite{ferragina2020learned}).
+Questo approccio si sta dimostrando vincente in una vasta gamma di contesti, dove si riscontra un aumento dell'efficienza sia in termini di spazio che di tempo rispetto all'approccio classico.
+
+Chiaramente, ci possiamo aspettare un miglioramento delle prestazioni solo quando i dati seguono, almeno in parte, uno schema; se così non fosse, mancherebbe il presupposto di base per il quale ha senso allenare un modello di ML. Di fatto, la misura delle prestazioni di una struttura dati appresa non è indipendente dalla distribuzione dei dati utilizzati, e va quindi ottenuta empiricamente, tramite un insieme di test.
+
+Un esempio di strutture dati apprese appartenente al contesto dei problemi di ASM è il filtro di Bloom appreso (\textit{Learned Bloom Filter}, LBF) (\cite{kraska2018learned}).
+
+Come già accennato, il problema dell'ASM può essere inquadrato, nell'ambito dell'apprendimento supervisionato, come un problema di classificazione binaria. 
+Supponiamo di avere l'insieme delle chiavi $S \subset \mathcal{U}$ e un insieme finito di soli negativi $D^- \subset \mathcal{U}$, quindi disgiunto da $S$. Allora, possiamo definire un problema di classificazione binaria in cui il dataset è
+\begin{equation}
+    D = \{ (x,1) \}_{x \in S} \space \cup \space \{ (x,0) \}_{x \in D^-} 
+\end{equation}
+e si vuole ottenere da $D$ un modello $m : \mathcal{U} \rightarrow [0, 1]$ tale che, per qualsiasi $x \in \mathcal{U}$, più è alto il valore $m(x)$, più è probabile che $x \in S$. Per ricondurre l'output di $m$ a una classificazione binaria, si introduce una soglia $\tau \in [0,1]$ in modo tale che $x$ sia giudicato come chiave se e solo se $m(x)> \tau$.
+
+Il classificatore $m$ è il primo componente di un LBF, ma da solo non basta; infatti, non garantisce che l'insieme di falsi negativi $\{x \in S \enspace | \enspace m(x) \leq \tau \}$ sia vuoto, il che non sarebbe tollerato. Per questo motivo, un LBF impiega anche un BF classico \textit{di backup}, che denotiamo con $F$, in cui vengono inserite tutte le chiavi appartenenti al suddetto insieme. Tutti gli elementi classificati da $m$ come non-chiavi vengono sottoposti a $F$, dunque, l'elemento $x \in \mathcal{U}$ viene ritenuto una chiave se e solo se $m(x) > \tau$ o se $m(x) \leq \tau$ e $F$ non lo scarta. In tutti gli altri casi, $x$ viene scartato, ossia viene reputato una non-chiave.
+
+Dal momento che il FPR di un LBF, al contrario di quanto si ha per un BF classico, dipende dalla distribuzione dei dati utilizzati, viene stimato empiricamente grazie a un insieme di test $T \subset D^-$ (disgiunto dal train set $A = D \setminus T$), e può essere espresso come
+\begin{equation}
+    \epsilon = \epsilon_{\tau} + (1-\epsilon_{\tau}) \epsilon_F \enspace ,
+    \label{expr:fpr-lbf}
+\end{equation}
+dove:
+\begin{itemize}
+    \item $\epsilon_{\tau}$ è il FPR empirico di $m$ su $T$, che si può scrivere come
+    \begin{equation}
+        \epsilon_{\tau} = \frac{|\{ x \in S \enspace | \enspace m(x) > \tau \}|}{|T|} \enspace,
+    \end{equation}
+    mentre
+    \item $\epsilon_F$ è il FPR del BF di backup $F$, la cui espressione è presentata nel paragrafo \ref{par:analisi-bf}.
+\end{itemize}
+La \ref{expr:fpr-lbf} esprime il fatto che un falso positivo possa essere commesso direttamente da $m$ (primo termine), oppure, se $m$ classifica correttamente la non-chiave, possa essere commesso da $F$ (secondo termine).
+
+Fissato il valore desiderato per $\epsilon$, possiamo costruire $F$ impostando $\epsilon_F = (\epsilon - \epsilon_{\tau}) / (1- \epsilon_{\tau})$, chiedendo ovviamente che $\epsilon_{\tau} < \epsilon$.
+
+È importante sottolineare che, per via della dipendenza di $\epsilon_{\tau}$ da $T$, stimare in modo affidabile il FPR di un LBF non è semplice.
+
+Da notare anche che l'insieme $T$ è composto interamente da non-chiavi, cosa inusuale per un insieme di test in un problema di classificazione binaria. Questo ha senso in quanto, in un problema di ASM, \textit{tutte} le chiavi, ossia i positivi, devono necessariamente essere mostrate durante l'addestramento.
+
+\section{Filtri Puramente Appresi}
+L'idea alla base di un filtro puramente appreso (\textit{Fully Learned Filter}, FLF) è seguire il paradigma del LBF, secondo cui le osservazioni classificate dal modello di ML $m$ come non-chiavi vengono passate al filtro di backup, ma su una \textit{catena} di $t$ modelli, senza ricorrere ad alcun BF classico. Un'altra differenza rispetto al LBF risiede nel fatto che i $t$ modelli non restituiscono un valore in $[0,1]$ da confrontare con una soglia, ma direttamente una predizione in $\{0,1\}$.
+
+Durante la fase di addestramento, il train set viene progressivamente ridotto: ciascun modello, a eccezione dell'ultimo, che merita una trattazione speciale, trattiene le osservazioni che classifica positivamente e passa al successivo ciò che rimane del train set. Questo significa che ogni modello impara a riconoscere una porzione dei positivi che i modelli precedenti non hanno saputo cogliere (ovviamente, il primo modello parte dall'intero train set). Si continua ad aggiungere modelli alla catena fintanto che il train set contiene chiavi; il $t$-esimo modello, l'ultimo, è quello che identifica correttamente le chiavi rimaste.
+Un FLF, dunque, non è altro che un insieme ordinato di $t$ modelli di ML. I ragionamenti portati avanti in questo capitolo prescindono dalla specifica tipologia di modelli di ML che si sceglie di utilizzare per il FLF.
+
+Supponiamo di avere un dataset $D$ composto da chiavi, la cui etichetta è 1, e da non-chiavi, con etichetta 0:
+\begin{equation}
+    D = \{ (\mathbf{x}_i, y_i) \in \mathbb{R}^d \times \{0,1 \}, \enspace i \in \{1,2, \dots, n \} \},
+\end{equation}
+dove $n$ è il numero totale di esempi e $d$ è il numero di attributi di ciascuna istanza. Sia $A$ un train set ricavato da $D$, che contenga tutte le chiavi e una percentuale delle non-chiavi, e sia $T=D\setminus A$ un test set, che contenga solo le restanti non-chiavi.
+Senza limiti sul numero di classificatori, lo schema di addestramento di un FLF è illustrato nell'Algoritmo \ref{alg:addestramento-catena}.
+
+\begin{algorithm}[ht]
+\caption{Addestramento di un FLF}
+    \begin{algorithmic}[1]
+    \Require Train set $A$
+    \Ensure Sequenza di modelli $\mathbf{m} = \{m_1, m_2, \dots, m_t \}$
+    \State $\mathbf{m} \gets \emptyset$
+    \State $j \gets 1$
+    \State $A_j \gets A$
+    \While{\textbf{True}}
+        \State Addestra $m_j : \mathbb{R}^d \rightarrow \{0,1 \}$ su $A_j$
+        \State Aggiungi $m_j$ a $\mathbf{m}$
+        \State $\Phi_j \gets \{ (\mathbf{x}_i, y_i) \in A_j \enspace | \enspace y_i = 1 \wedge m_j(\mathbf{x}_i)=0 \}$ \Comment{Insieme dei falsi negativi.}
+        \If{$\Phi_j = \emptyset$}
+            \State \Return $\mathbf{m}$
+        \Else
+            \State $j \gets j+1$
+            \State $A_j \gets A_{j-1} \setminus \{ (\mathbf{x}_i, y_i) \in A_{j-1} \enspace | \enspace m_j(\mathbf{x}_i)=1 \} \}$
+        \EndIf
+    \EndWhile
+    \end{algorithmic}
+    \label{alg:addestramento-catena}
+\end{algorithm}
+
+Al termine dell'addestramento, disponiamo di $t$ modelli (con $t$ dipendente da quanto detto sopra) che possiamo utilizzare per la classificazione nella maniera illustrata dall'Algoritmo \ref{alg:query}. 
+
+\begin{algorithm}[ht]
+\caption{Operazione di query}
+    \begin{algorithmic}[1]
+        \Require $\mathbf{u} \in \mathbb{R}^d, \mathbf{m} = (m_1, m_2, \dots, m_t)$
+        \Ensure \textbf{True} se $\mathbf{u}$ è ritenuta una chiave, \textbf{False} altrimenti
+        \For {$j$ in $1, \dots, t$}
+            \If {$m_j (\mathbf{u})=1$}
+                \State \Return \textbf{True}
+            \EndIf
+        \EndFor
+        \State \Return \textbf{False}
+    \end{algorithmic}
+    \label{alg:query}
+\end{algorithm}
+
+\section{FPR di un FLF}
+\label{par:fpr-flf}
+Analogamente a quanto visto per il LBF, giungiamo a un'approssimazione del FPR complessivo del filtro stimando i FPR dei singoli classificatori che compongono la catena. Supponendo, per esempio, di avere $t=4$, il FPR del filtro sarebbe
+\begin{equation}
+    \epsilon = \epsilon_1 + (1 - \epsilon_1) \cdot (\epsilon_2 + (1 - \epsilon_2) \cdot (\epsilon_3 + (1 - \epsilon_3) \cdot \epsilon_4 ) ),
+    \label{expr:fpr-ricorsivo}
+\end{equation}
+dove $\epsilon_j$ è il FPR del modello $j$-esimo. È evidente la struttura ricorsiva di questa formula, ma possiamo manipolarla per renderla più semplice da maneggiare.
+Svolgiamo innanzitutto il termine più annidato. Utilizzando un $t$ generico, tale termine può essere riscritto in questo modo:
+\begin{equation}
+    \begin{aligned}
+        \epsilon_{t-1} + (1 - \epsilon_{t-1}) \cdot \epsilon_t &= \epsilon_{t-1} + \epsilon_{t} - \epsilon_{t-1} \epsilon_{t} \\
+        &= 1 - 1 + \epsilon_{t-1} + \epsilon_{t} - \epsilon_{t-1} \epsilon_{t} \\
+        &= 1 - (1 - \epsilon_{t-1} - \epsilon_{t} + \epsilon_{t-1} \epsilon_{t}) \\
+        &= 1 - (1-\epsilon_{t-1})(1-\epsilon_{t}) \enspace.
+    \end{aligned}
+\end{equation}
+Sostituendo nella formula ricorsiva, considerando anche il termine $\epsilon_{t-2}$, si ha:
+\begin{equation}
+    \begin{aligned}&
+        \epsilon_{t-2} + (1 - \epsilon_{t-2}) \cdot (\epsilon_{t-1} + (1 - \epsilon_{t-1}) \cdot \epsilon_{t} ) \\
+        &=\epsilon_{t-2} + (1 - \epsilon_{t-2}) \cdot (1 - (1-\epsilon_{t-1})(1-\epsilon_{t})) \\
+        &= \epsilon_{t-2} + (1 - \epsilon_{t-2}) - (1 - \epsilon_{t-2})(1 - \epsilon_{t-1})(1 - \epsilon_{t}) \\
+        &= 1 - (1 - \epsilon_{t-2})(1 - \epsilon_{t-1})(1 - \epsilon_{t}) \enspace.
+    \end{aligned}
+\end{equation}
+Si può procedere in maniera analoga per tutti i termini precedenti, giungendo alla seguente espressione di $\epsilon$:
+\begin{equation}
+    \epsilon = 1- (1-\epsilon_{1})(1-\epsilon_{2}) \dots (1 - \epsilon_{t-2})(1 - \epsilon_{t-1})(1 - \epsilon_{t}) \enspace ,
+\end{equation}
+che può essere sintetizzata come
+\begin{equation}
+    \epsilon = 1- \prod_{j=1}^t (1-\epsilon_j) \enspace .
+    \label{expr:fpr-prod}
+\end{equation}
+Questa espressione evidenzia anche l'influenza monotonica crescente che ogni $\epsilon_j$ ha su $\epsilon$.
+
+Per ottenere gli $\epsilon_j$, impieghiamo il test set $T$ in maniera analoga rispetto al train set $A$: ciascun modello classifica il dataset che riceve dal precedente (il primo lavora direttamente con $T$), e passa al successivo lo stesso meno gli esempi classificati come chiavi, come illustrato dall'Algoritmo \ref{alg:test-fpr}. Essendo $T$ composto solamente da non-chiavi, ogni modello trattiene i falsi positivi che commette.
+Dunque, anche il test set viene progressivamente ridotto (a meno che nessun modello commetta falsi positivi, cosa improbabile).
+
+\begin{algorithm}
+    \caption{Stima di $\epsilon_j$, con $j\in\{1, 2, \ldots, t\}$}
+    \begin{algorithmic}[1]
+        \Require Test set $T$, $\mathbf{m} = (m_1, m_2, \dots, m_t)$
+        \Ensure $\boldsymbol{\epsilon} = (\epsilon_1, \epsilon_2, \dots, \epsilon_t)$
+        \State $\boldsymbol{\epsilon} \gets ()$
+        \State $T_1 \gets T$
+        \For {$j$ in $1, \dots, t$}
+            \State $\Psi_j \gets \{(\mathbf{x}_i, y_i) \in T_j \enspace | \enspace m_j(\mathbf{x}_i)=1 \}$ \Comment{Insieme dei falsi positivi.}
+            \State $\epsilon_j \gets |\Psi_j| /{|T_j|}$
+            \State Aggiungi $\epsilon_j$ a $\boldsymbol{\epsilon}$
+            \If{$j<t$}
+                \State $T_{j+1} \gets T_j \setminus \Psi_j$ 
+            \EndIf
+        \EndFor
+        \State \Return $\boldsymbol{\epsilon}$
+    \end{algorithmic}
+    \label{alg:test-fpr}
+\end{algorithm}
+
+Per non ripetere tutte le $t$ iterazioni due volte, possiamo svolgere nello stesso ciclo l'addestramento dei modelli (Algoritmo \ref{alg:addestramento-catena}) e la loro valutazione; a ogni iterazione, il modello $j$-esimo viene allenato e immediatamente se ne valuta il FPR empirico.
+
+\section{Numero di Classificatori di un FLF}
+
+Fissato un numero di chiavi $n$ e un limite superiore $\bar \epsilon$ per il FPR, vogliamo costruire un filtro puramente appreso che abbia {$\bar\epsilon$} come FPR empirico (o che vi si avvicini il più possibile) e che occupi meno spazio di memoria rispetto al BF classico equivalente, ossia quello che gestisce lo stesso numero di chiavi con lo stesso FPR.
+
+Possiamo quindi definire un \textit{budget} di spazio $s$ entro cui il filtro puramente appreso deve rientrare per essere considerato conveniente. Tale budget corrisponde allo spazio $m$ occupato da un BF classico che abbia FPR $= \bar \epsilon$ e che gestisca $n$ chiavi, la cui formula è stata presentata nel paragrafo \ref{par:analisi-bf}:
+\begin{equation}
+    m = \left\lceil - \frac{n\ln{\bar \epsilon}}{\ln^2 2} \right\rceil .
+\end{equation}
+Poniamo dunque $s = m$. Denotando con $p$ lo spazio richiesto da un filtro puramente appreso, possiamo affermare che, affinché quest'ultimo sia conveniente rispetto a un BF equivalente, deve essere $p < s$.
+
+Lo spazio di un filtro puramente appreso si calcola sommando lo spazio occupato dai $t$ modelli che lo compongono:
+\begin{equation}
+    p = \sum_{j=1}^t b_j \enspace ,
+\end{equation}
+dove $b_j$ è lo spazio occupato dal modello $j$-esimo. 
+Se si sceglie di utilizzare dei modelli con dimensione costante $b$, allora si ha semplicemente $p = tb$.
+
+In quest'ultimo scenario, conoscendo $b$, diventa automatico calcolare la massima lunghezza della catena per la quale vale $p < s$:
+\begin{equation}
+    t_{max} = \lfloor s/b \rfloor \enspace .
+\end{equation}
+
+Se, invece, la dimensione dei modelli fosse variabile, definire $t$ non sarebbe immediato, ma potremmo comunque giungere a una buona stima considerando la dimensione massima che ciascun classificatore può raggiungere.
+
+In ogni caso, stabilire a priori il numero di classificatori $t$, che diventa quindi un iperparametro, ci permette di sviluppare tutti i ragionamenti successivi.
+
+\section{FPR Desiderato}
+
+Vogliamo trovare un modo per regolare i singoli $\epsilon_j$ in modo tale che risulti $\epsilon = \bar \epsilon$.
+Tuttavia, calcolando $\epsilon$ come nella \eqref{expr:fpr-prod}, potrebbero esistere diverse combinazioni di $\epsilon_1, \epsilon_2, \dots, \epsilon_t$ tali che $\epsilon = \bar \epsilon$. Questo rende eccessivamente complessa la regolazione degli $\epsilon_j$; dunque, adottiamo la seguente semplificazione: imponiamo che ogni $\epsilon_j$ assuma lo stesso valore $z \in (0,1)$. In questo modo, possiamo esprimere $\epsilon$ come
+\begin{equation}
+    \epsilon = 1- (1-z)^t \enspace .
+    \label{expr:fpr-z}
+\end{equation}
+Se imponiamo $\epsilon = \bar \epsilon$, possiamo risolvere rispetto a $z$ e trovare il FPR che ciascun $m_j$ deve avere:
+\begin{equation}
+    z = 1 - \sqrt[t]{1-\bar \epsilon}
+    \label{expr:z}
+\end{equation}
+
+In realtà, $z$ è un limite superiore: se per qualche $j$ dovesse essere che $\epsilon_j < z$ e al contempo $\epsilon_k=z$ per ogni $k\neq j$, allora si avrebbe $\epsilon < \bar \epsilon$. Non è difficile dimostrarlo: come abbiamo già sottolineato, ciascun $\epsilon_j$ influenza in maniera monotonica crescente $\epsilon$.
+
+Pur essendo un limite superiore, possiamo trattare $z$ come un valore a cui ogni $\epsilon_j$ deve tendere: vogliamo che il margine concesso sul FPR venga sfruttato al massimo da ogni $m_j$ per poter permettere al filtro di occupare il minor spazio possibile (ricordiamo che quello tra FPR e spazio è sempre un compromesso). Affinché ciascun $\epsilon_j$ si avvicini il più possibile a $z$, dev'esserci un iperparametro della tipologia di modello che stiamo usando che ci permetta di attribuire più o meno importanza alla classe positiva rispetto a quella negativa, così da poter regolare il FPR. Gli iperparametri $C_+, C_-$ introdotti nelle varianti cost-sensitive dei modelli che abbiamo presentato nel Paragrafo \ref{par:tipologie} hanno proprio questo scopo.
+
+Finora abbiamo trattato $z$ come una costante, ma in realtà, possiamo adattarne il valore in base alle prestazioni dei modelli che vengono man mano allenati e valutati. 
+Supponiamo, per esempio, di aver svolto le prime due iterazioni, e di avere quindi $\epsilon_1$ e $\epsilon_2$. 
+Possiamo allora calcolare un nuovo valore di $z$, diciamo $z'$, sulla base delle prestazioni dei primi due classificatori $m_1$ e $m_2$, tale che, se raggiunto dai successivi $t-2$ classificatori, renda $\bar\epsilon$ il tasso di falsi positivi di tutto il filtro FLF. Infatti, partendo da \eqref{expr:fpr-z} e sfruttando anche $\epsilon_1$ e $\epsilon_2$, imponiamo
+\begin{equation}
+    \bar \epsilon = 1- (1-\epsilon_1)(1-\epsilon_2)(1-z')^{t-2} \enspace.
+\end{equation}
+Risolvendo per $z'$, otteniamo:
+\begin{equation}
+    z' = 1-\sqrt[t-2]{\frac{1-\bar{\epsilon}}{\left(1-\epsilon_{1}\right)\left(1-\epsilon_{2}\right)}} \enspace,
+\end{equation}
+che possiamo generalizzare in questo modo:
+\begin{equation}
+    z' = 1-\sqrt[t-k]{\frac{1-\bar{\epsilon}}{\prod_{j=1}^k (1-\epsilon_j)}} \enspace,
+    \label{expr:adattamento-z}
+\end{equation}
+dove $k$ è il numero di iterazioni già svolte.
+
+Dunque, a ogni iterazione, ottenuto $\epsilon_j$, possiamo subito aggiornare $z$ (chiaramente, non svolgiamo questo passaggio se $j=t$).
+
+Com'è anche intuitivo pensare, si ha $z' > z$ se i primi classificatori riescono a raggiungere un FPR al di sotto di $z$, per cui i successivi si possono permettere anche di avere FPR $> z$; al contrario, se i primi classificatori non riescono a rispettare il limite $z$, i successivi dovranno compensare standovi al di sotto.
+
+
+
+
+
+
+
+
+\section{Ultima Iterazione}
+\label{par:ultima-iterazione}
+L'ultimo classificatore, a differenza di tutti gli altri, deve garantire l'assenza di falsi negativi. Per farlo, deve specializzarsi sulle chiavi rimaste nel train set, anche qualora queste non seguano alcun pattern. Infatti, non impieghiamo l'ultimo modello nel modo usuale con cui si utilizzano i modelli di ML, ossia per riconoscere nei dati degli schemi generali con cui affrontare istanze nuove, ma vogliamo che quest'ultimo sia pronto a riconoscere in maniera mirata le chiavi rimaste; deve potersi specializzare sugli esempi positivi. In altre parole, deve poter fare overfitting ove necessario. 
+Abbiamo introdotto l'overfitting come un fenomeno da evitare, perché impedisce ai modelli di generalizzare su nuovi dati. Qui, però, non esistono esempi positivi al di fuori del train set, per cui non è richiesto al classificatore di saper generalizzare per affrontare nuove istanze positive.
+
+Dal momento che $m_t$ ha esigenze particolari rispetto agli altri classificatori, lo trattiamo diversamente. I primi modelli, da $m_1$ a $m_{t-1}$ riceveranno lo stesso tipo di addestramento, diverso da quello $m_t$, il quale può anche appartenere a una famiglia di modelli completamente diversa rispetto a quella dei primi.
+
+Per quanto riguarda $b_t$, la dimensione di $m_t$, si ha un limite ben preciso da rispettare:
+\begin{equation}
+    b_t < s - \sum_{j=1}^{t-1} b_j \enspace.
+\end{equation}
+Ossia, la differenza tra il budget iniziale $s$ e lo spazio già occupato dai classificatori che precedono $m_t$.
+
+\subsection{Salto all'Ultimo Classificatore}
+
+Durante l'addestramento dei modelli, supponiamo di trovarci al termine dell'iterazione $j = t - k$, con $0<k<t$. Ossia, abbiamo svolto almeno un'iterazione e ne manca almeno una. Sotto determinate condizioni, possiamo saltare direttamente all'addestramento dell'ultimo modello, senza allenare e aggiungere alla catena i classificatori con indici in $[j,t-1]$, e scartando il modello $m_j$ appena allenato.
+
+Le condizioni di salto si basano sul fatto che, col progredire delle iterazioni, identificare più chiavi possibili, contenendo il FPR e lo spazio occupato, diventa solo più difficile. Infatti, se nel train set sono presenti chiavi che seguono pattern facili da riconoscere, i primi modelli tenderanno a trattenere quelle, lasciando ai successivi solo gli esempi positivi che seguono schemi più complessi o che non ne seguono alcuno (spesso, l'ultimo classificatore si trova in quest'ultimo scenario). Escludendo casi in cui sia molto facile separare le chiavi dalle non-chiavi, agli ultimi classificatori ci si aspetta che rimangano da gestire chiavi meno agevoli da separare dalle non chiavi, o, in altre parole, collocate in zone a maggiore densità di non-chiavi.
+Questo significa che, al progredire delle iterazioni,
+\begin{itemize}
+    \item contenere il FPR di ogni modello in un intorno di $z$ sufficientemente piccolo tende a diventare più difficile, e
+    \item l'efficienza, intesa come il rapporto tra il numero di chiavi identificate e lo spazio occupato mantenendo un FPR  ammissibile, tende a diminuire.
+\end{itemize}
+Da queste considerazioni, in aggiunta al fatto, già presentato, che i modelli da $m_1$ a $m_{t-1}$ vengono tutti addestrati alla stessa maniera, derivano le seguenti due condizioni di salto (ciascuna è condizione sufficiente).
+\begin{enumerate}
+    \item Il modello $m_j$ non riesce a ottenere un FPR sufficientemente vicino a $z$, in base a una determinata soglia di precisione $\sigma$, iperparametro del filtro. Infatti, se è così, neanche i modelli successivi (se ce ne sono) fino a $m_{t-1}$ compreso difficilmente possono riuscirci.
+
+    \item Il modello $m_j$ è meno efficiente, ossia occupa più spazio, rispetto a un BF classico che gestisce lo stesso numero di chiavi con FPR $= \epsilon_j$. Infatti, se è così, ci si aspetta che anche i modelli successivi (se ce ne sono) fino a $m_{t-1}$ compreso, per le ragioni già evidenziate, siano ancora meno efficienti dei relativi BF equivalenti. 
+\end{enumerate}
+Quest'ultima condizione non riguarda solo i modelli da $m_1$ a $m_{t-1}$, ma anche l'ultimo. Infatti, possiamo confrontare anche $m_t$ con il BF classico equivalente: se quest'ultimo è più efficiente, lo utilizziamo al posto del classificatore, ottenendo così un filtro ibrido, non più puramente appreso.
+
+Dalle condizioni di salto deriva un'importante considerazione: fissare $t$ non significa necessariamente fissare il numero di classificatori che comporranno la catena. Infatti, se si verifica una condizione di salto, il filtro sarà composto da non più di $t-1$ classificatori (almeno uno viene scartato).
+
+Questo significa che il calcolo di $z$ (formula \eqref{expr:z}) potrebbe essere troppo stringente, data la dipendenza dal numero di iterazioni. In particolare, se venissero eseguite meno delle $t$ iterazioni previste, il valore calcolato per $z$ risulterebbe sottostimato per tutti i modelli allenati prima di effettuare il salto. Ossia, tali modelli avrebbero potuto permettersi un FPR più alto.
+
+All'ultima iterazione, tuttavia, si può sempre fare affidamento sulla \eqref{expr:adattamento-z} per calcolare con esattezza il valore di $z$, essendo noto il numero di classificatori allenati e il numero di classificatori da allenare, ossia uno.
+
+
+
+\subsection{Algoritmo di Addestramento Completo}
+
+Basandoci sull'Algoritmo \ref{alg:addestramento-catena} e dotandolo di tutte le caratteristiche che abbiamo descritto nei paragrafi precedenti, giungiamo alla procedura di addestramento di un FLF descritta negli Algoritmi \ref{alg:addestramento-catena-completo-1} e \ref{alg:addestramento-catena-completo-2}.
+
+\begin{algorithm}[ht]
+\caption{Addestramento di un FLF, schema completo (parte 1)}
+\begin{algorithmic}[1]
+    \Require Train set $A$, Test set $T$, FPR richiesto $\bar \epsilon$, numero massimo di classificatori $t$, soglia di precisione $\sigma$
+    \Ensure $\mathbf{m} = \{m_1, m_2, \dots, m_t \}$, $\boldsymbol{\epsilon} = \{\epsilon_1, \epsilon_2, \dots, \epsilon_t \}$ se il FLF è vantaggioso rispetto a un BF classico; \textbf{Null} altrimenti
+    \State $\mathbf{m}, \mathbf{b}, \boldsymbol{\epsilon} \gets \emptyset$
+    \State $j \gets 1$
+    \State $P = \{(\mathbf{x}_i, y_i) \in A \enspace | \enspace y_i = 1 \}$
+    \State $s \gets \left\lceil - |P|\ln{\epsilon}/\ln^2 2 \right\rceil$
+    \State $A_j \gets A$, $T_j \gets T$
+    \State $z \gets 1 - \sqrt[t]{1-\bar \epsilon}$
+    \State last\_iteration $\gets$ \textbf{False}
+    
+    \While{\textbf{True}}
+        \If{last\_iteration}
+            \If{$|\mathbf{m}|>0$}
+                \State $z \gets 1- (1- \bar \epsilon)/(\prod_{\epsilon_j \in \boldsymbol{\epsilon}}(1-\epsilon))$
+            \EndIf
+            \State $b_{\text{max}} = s - \sum_{b \in \mathbf{b}} b$
+            \State Addestra su $A_j$ il più piccolo modello $m_j$ tale che $\epsilon_j \leq z$, FNR $=0$, $b_j \leq b_{\text{max}}$
+            \If{$m_j=$ \textbf{Null}}
+            
+                \State \Comment{$b_{\text{max}}$ è troppo stringente. Si può provare un BF classico.}
+                \State $m_j \gets$ BF costruito su $A_j$ con $\epsilon_j \leq z$
+                \State $b_j \gets$ spazio($m_j$)
+                \If{$b_j \leq b_{\textit{max}}$}
+                    \State Aggiungi $m_j$ a $\mathbf{m}$, aggiungi $\epsilon_j$ a $\boldsymbol{\epsilon}$ \Comment{Filtro ibrido.}
+                    \State \Return $\mathbf{m}, \boldsymbol{\epsilon}$
+                \Else
+                    \State \Return \textbf{Null} \Comment{FLF non conviene rispetto a BF.}
+                \EndIf
+                
+            \Else
+
+                \State $b_{\text{BF}} \gets$ spazio occupato dal BF equivalente a $m_j$
+                \If{$b_{\text{BF}} < b_j$}
+                    \State $m_j \gets$ BF costruito su $A_j$ \Comment{Filtro ibrido.}
+                    \State $b_j \gets b_{\text{BF}}$
+                \EndIf
+                \State Aggiungi $m_j$ a $\mathbf{m}$, aggiungi $\epsilon_j$ a $\boldsymbol{\epsilon}$
+                \State \Return $\mathbf{m}, \boldsymbol{\epsilon}$
+            
+            \EndIf
+        
+            \algstore{alg:addestramento}
+\end{algorithmic}
+\label{alg:addestramento-catena-completo-1}
+\end{algorithm}
+
+\begin{algorithm}[ht]
+\caption{Addestramento di un FLF, schema completo (parte 2)}
+\begin{algorithmic}[1]
+            \algrestore{alg:addestramento}
+
+        \Else
+            \State \Comment{Iterazioni che precedono l'ultima.}
+            \If{$|\mathbf{m}|>0$}
+                \State $z \gets 1- \sqrt[t-|\mathbf{m}|]{(1- \bar \epsilon)/(\prod_{\epsilon_j \in \boldsymbol{\epsilon}}(1-\epsilon))}$
+            \EndIf
+            \State Addestra su $A_j$ un modello $m_j$ tale che $\epsilon_j \sim z$
+            \State $b_j \gets \text{spazio}(m_j)$
+            \State $b_{\text{BF}} \gets$ spazio occupato dal BF equivalente a $m_j$
+            \If{$b_j \leq b_{\text{BF}}$ \textbf{and} $|\epsilon_j - z| \leq \sigma$}
+                \State Aggiungi $m_j$ a $\mathbf{m}$, aggiungi $\epsilon_j$ a $\boldsymbol{\epsilon}$, aggiungi $b_j$ a $\mathbf{b}$
+                \State $\Phi_j \gets \{ (\mathbf{x}_i, y_i) \in A_j \enspace | \enspace y_i = 1 \wedge m_j(\mathbf{x}_i)=0 \}$
+                \State $\Psi_j \gets \{(\mathbf{x}_i, y_i) \in T_j \enspace | \enspace m_j(\mathbf{x}_i)=1 \}$
+                \If{$\Phi_j = \emptyset$}
+                    \State \Return $\mathbf{m}, \boldsymbol{\epsilon}$
+                \EndIf
+                
+                \State $j \gets j+1$
+                \State $A_j \gets A_{j-1} \setminus \{ (\mathbf{x}_i, y_i) \in A_{j-1} \enspace | \enspace m_j(\mathbf{x}_i)=1 \}$
+                \State $T_j \gets T_{j-1} \setminus \Psi_{j-1}$ 
+                \State last\_iteration $\gets (j=t-1)$ 
+            \Else
+                \State last\_iteration $\gets$ \textbf{True}
+            \EndIf
+        \EndIf
+    \EndWhile
+\end{algorithmic}
+\label{alg:addestramento-catena-completo-2}
+\end{algorithm}
